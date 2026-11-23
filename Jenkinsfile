@@ -2,8 +2,7 @@ pipeline {
     agent {
         docker {
             image 'semgrep/semgrep:latest'
-            // Clear the image entrypoint and give Semgrep a writable HOME
-            args '--entrypoint= -e HOME=/tmp'
+            args '--entrypoint= -e HOME=/tmp -e SEMGREP_IN_DOCKER=0'
         }
     }
 
@@ -14,6 +13,7 @@ pipeline {
 
     environment {
         REPORT = 'semgrep-report.json'
+        SCAN_PATHS = '.'   // space-separated paths, '.' = whole repo checkout
     }
 
     stages {
@@ -21,15 +21,23 @@ pipeline {
             steps {
                 sh 'git config --global --add safe.directory "$PWD" || true'
                 sh 'semgrep --version'
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    sh '''
+
+                // Exit code 1 = findings found, 2 = Semgrep itself failed
+                script {
+                    int rc = sh(returnStatus: true, script: '''
                         semgrep scan \
                           --config p/owasp-top-ten \
                           --metrics=off \
                           --error \
                           --verbose \
-                          --json-output="$REPORT"
-                    '''
+                          --json-output="$REPORT" \
+                          $SCAN_PATHS
+                    ''')
+                    if (rc == 1) {
+                        unstable('Semgrep found issues')
+                    } else if (rc != 0) {
+                        error("Semgrep failed with exit code ${rc}")
+                    }
                 }
             }
         }
